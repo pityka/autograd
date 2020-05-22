@@ -3,48 +3,55 @@ import org.saddle.ops.BinOps._
 import org.saddle.linalg._
 import java.{util => ju}
 
+/**
+  * Params: the input and the function which calculates the partial derivative
+  * of the function value wrt to this input
+  *
+  * y = f1 o f2 o .. o fn
+  *
+  * One of these subexpression (f_i) has value w2 and arguments w1.
+  * We can write this: dy/dw1 = dy/dw2 * dw2/dw1.
+  * dw2/dw1 is the Jacobian of f_i at the current value of w1.
+  * dy/dw2 is the Jacobian of y wrt to w2 at the current value of w2.
+  *
+  * The current value of w1 and w2 are computed in a forward pass.
+  * The value dy/dy is 1 and from this dy/dw2 is recursed in the backward pass.
+  * The Jacobian function of dw2/dw1 is either computed symbolically.
+  *
+  * https://en.wikipedia.org/wiki/Automatic_differentiation#Reverse_accumulation
+  * http://www.cs.cmu.edu/~wcohen/10-605/notes/autodiff.pdf
+  *
+  * The function given in this argument is dy/dw2 => dy/dw2 * dw2/dw1.
+  * The argument is coming down from the backward pass.
+  * The Op fills in the symbolic part and the multiplication.
+  *
+  * The shape of the argument given to that function is the transpose of the shape of the value of Op
+  * The shape of the return is n x m where n is the value dimension and m is the param dimension
+  */
 trait Op {
   val value: Variable
   val params: List[(Variable, Option[Mat[Double] => Mat[Double]])]
-  // def gradient: List[(Variable, D)]
 }
 
 case class Variable(
     op: Op,
-    value: Mat[Double]
+    value: Mat[Double],
+    needsGrad: Boolean = true
 ) {
-
-  /** Zip with a function which calculates the partial derivative of the function value wrt to self
-    *
-    * y = f1 o f2 o .. o fn
-    *
-    * One of these subexpression (f_i) has value w2 and arguments w1.
-    * We can write this: dy/dw1 = dy/dw2 * dw2/dw1.
-    * dw2/dw1 is the Jacobian of f_i at the current value of w1.
-    * dy/dw2 is the Jacobian of y wrt to w2 at the current value of w2.
-    *
-    * The current value of w1 and w2 are computed in a forward pass.
-    * The value dy/dy is 1 and from this dy/dw2 is recursed in the backward pass.
-    * The Jacobian function of dw2/dw1 is either computed symbolically.
-    *
-    * https://en.wikipedia.org/wiki/Automatic_differentiation#Reverse_accumulation
-    * http://www.cs.cmu.edu/~wcohen/10-605/notes/autodiff.pdf
-    *
-    * The function given in this argument is dy/dw2 => dy/dw2 * dw2/dw1.
-    * The argument is coming down from the backward pass.
-    * The Op fills in the symbolic part and the multiplication.
-    */
+  def detach = copy(needsGrad = false)
   def zipBackward(fn: Mat[Double] => Mat[Double]) = (this, Some(fn))
   def accumulateGrad(
       incoming: Mat[Double],
       computeGrad: Option[Mat[Double] => Mat[Double]]
-  ) = computeGrad.foreach { f =>
-    val d = f(incoming)
+  ) = if (needsGrad) {
+    computeGrad.foreach { f =>
+      val d = f(incoming)
 
-    if (partialDerivative.isEmpty) {
-      partialDerivative = Some(d)
-    } else {
-      partialDerivative = Some(partialDerivative.get + d)
+      if (partialDerivative.isEmpty) {
+        partialDerivative = Some(d)
+      } else {
+        partialDerivative = Some(partialDerivative.get + d)
+      }
     }
   }
   val id = ju.UUID.randomUUID()
@@ -53,51 +60,21 @@ case class Variable(
       s"$op == $value"
     else s"$op"
   var partialDerivative: Option[Mat[Double]] = None
+
+  def +(other: Variable) = Add(this, other).value
+  def -(other: Variable) =
+    Add(this, Mult(other, Constant(Mat(Vec(-1d))).value).value).value
+
+  def *(other: Variable) = Mult(this, other).value
+  def mm(other: Variable) = MatMul(this, other).value
+  def relu = Relu(this).value
+  def sum = Sum(this).value
+  def rowSum = RowSum(this).value
+
 }
 
-// val d = v.partialDerivative.get mm gradient
-
-// case class Constant(const: Double) extends Op[Double] {
-//   val value = Variable(this, const)
-//   def gradient = Nil
-//   override def toString = s"$const"
-// }
-
-// case class Add(a: Variable[Double], b: Variable[Double]) extends Op[Double] {
-//   val value = Variable(this, a.value + b.value)
-//   def gradient = List(a -> 1d, b -> 1d)
-//   override def toString = s"(${a.stringify()} + ${b.stringify()})"
-// }
-
-// case class Mult(a: Variable[Double], b: Variable[Double]) extends Op[Double] {
-//   val value = Variable(this, a.value * b.value)
-//   def gradient = List(a -> b.value, b -> a.value)
-//   override def toString = s"(${a.stringify()} * ${b.stringify()})"
-// }
-
-// case class Pow(a: Variable[Double], b: Variable[Double]) extends Op[Double] {
-//   val value = Variable(this, math.pow(a.value, b.value))
-//   def gradient =
-//     List(a -> b.value * math.pow(a.value, b.value - 1))
-//   override def toString = s"(${a.stringify()} ^ ${b.stringify()})"
-// }
-
 object Autograd {
-  // def backprop(v: Variable[Double]): Unit = {
-  //   v.partialDerivative = Some(1d)
-  //   def loop(v: Variable[Double]): Unit = {
-  //     v.op.gradient.filter(_._1.needsGrad).foreach {
-  //       case (v1, gradient) =>
-  //         val d = v.partialDerivative.get * gradient
-  //         if (v1.partialDerivative.isEmpty) {
-  //           v1.partialDerivative = Some(0d)
-  //         }
-  //         v1.partialDerivative = Some(v1.partialDerivative.get + d)
-  //         loop(v1)
-  //     }
-  //   }
-  //   loop(v)
-  // }
+
   private def topologicalSort[D](root: Variable): Seq[Variable] = {
     type V = Variable
     var order = List.empty[V]
@@ -126,7 +103,7 @@ object Autograd {
 
   }
   def backpropVec(v: Variable): Unit = {
-    v.partialDerivative = Some(mat.ident(v.value.numRows))
+    v.partialDerivative = Some(mat.ones(v.value.numRows, v.value.numCols))
     topologicalSort(v).foreach { v =>
       v.op.params.foreach {
         case (v1, computeGrad) =>
@@ -138,50 +115,37 @@ object Autograd {
   }
 }
 
-case class ConstantVec(const: Mat[Double]) extends Op {
+case class Relu(a: Variable) extends Op {
+  val params = List(
+    a.zipBackward(p => p.map(x => if (x < 0) 0d else x))
+  )
+  val value = Variable(this, a.value.map(x => if (x < 0) 0d else x))
+
+  override def toString = s"RELU(${a.stringify()})"
+}
+
+case class Constant(const: Mat[Double]) extends Op {
   val params = Nil
   val value = Variable(this, const)
   override def toString = s"$const"
 }
 
-case class AddVec(a: Variable, b: Variable) extends Op {
-  assert(a.value.numCols == 1)
-  assert(b.value.numCols == 1)
+case class Add(a: Variable, b: Variable) extends Op {
   val params = List(
-    a.zipBackward(p => p mm mat.ident(a.value.numRows)),
-    b.zipBackward(p => p mm mat.ident(a.value.numRows))
+    a.zipBackward(p => p),
+    b.zipBackward(p => p)
   )
   val value = Variable(this, a.value + b.value)
 
   override def toString = s"(${a.stringify()} + ${b.stringify()})"
 }
 
-case class SumVec(a: Variable) extends Op {
-  assert(a.value.numCols == 1)
-  val params = List(a.zipBackward(p => p mm a.value.T))
-
-  val value = Variable(this, Mat(Vec(a.value.colSums.sum2)))
-
-  override def toString = s"SUM(${a.stringify()})"
-}
-
-case class DotVec(a: Variable, b: Variable) extends Op {
-  assert(a.value.numCols == 1)
-  assert(b.value.numCols == 1)
-  val params =
-    List(a.zipBackward(p => p mm b.value.T), b.zipBackward(p => p mm a.value.T))
-
-  val value = Variable(this, a.value tmm b.value)
-
-  override def toString = s"(${a.stringify()} dot ${b.stringify()})"
-}
-
-case class MultVec(a: Variable, b: Variable) extends Op {
-  assert(a.value.numCols == 1)
-  assert(b.value.numCols == 1)
+case class Mult(a: Variable, b: Variable) extends Op {
   val params = List(
-    a.zipBackward(p => p mm mat.diag(b.value.col(0))),
-    b.zipBackward(p => p mm mat.diag(a.value.col(0)))
+    a.zipBackward(p => {
+      p * b.value
+    }),
+    b.zipBackward(p => p * a.value)
   )
 
   val value = Variable(this, a.value * b.value)
@@ -189,18 +153,59 @@ case class MultVec(a: Variable, b: Variable) extends Op {
   override def toString = s"(${a.stringify()} * ${b.stringify()})"
 }
 
+case class Sum(a: Variable) extends Op {
+  val params = List(a.zipBackward(p => {
+    (p mm mat.ones(1, a.value.length))
+  }))
+
+  val value = Variable(this, Mat(Vec(a.value.colSums.sum2)))
+
+  override def toString = s"SUM(${a.stringify()})"
+}
+case class ColSum(a: Variable) extends Op {
+  val params = List(a.zipBackward(p => {
+    (p * a.value.numRows)
+  }))
+
+  val value = Variable(this, Mat(a.value.colSums).T)
+
+  override def toString = s"COLSUM(${a.stringify()})"
+}
+case class RowSum(a: Variable) extends Op {
+  val params = List(a.zipBackward(p => {
+    (p * a.value.numCols)
+  }))
+
+  val value = Variable(this, Mat(a.value.rowSums))
+
+  override def toString = s"ROWSUM(${a.stringify()})"
+}
+
+// http://cs231n.stanford.edu/handouts/derivatives.pdf
+case class MatMul(a: Variable, b: Variable) extends Op {
+  val params =
+    List(a.zipBackward(p => p mmt b.value), b.zipBackward(p => a.value tmm p))
+
+  val value = Variable(this, a.value mm b.value)
+
+  override def toString = s"(${a.stringify()} dot ${b.stringify()})"
+}
+
 object Test extends App {
-  val x1 = ConstantVec(Mat(Vec(1d, 2d))).value
-  val x2 = ConstantVec(Mat(Vec(3d, 4d))).value
-  val tip = AddVec(
-    SumVec(MultVec(AddVec(x1, x2).value, x2).value).value,
-    DotVec(x1, x2).value
+  val x1 = Constant(Mat(Vec(1d, -20d, 3d), Vec(3d, 4d, 3d))).value
+  val x2 = Constant(Mat(Vec(3d, 4d, 3d), Vec(5d, 6d, 3d)).T).value
+  val x3 = Constant(Mat(Vec(3d))).value
+  val tip = ColSum(
+    RowSum(Relu(Mult(MatMul(x1, x2).value, MatMul(x1, x2).value).value).value).value
   ).value
 
-  println(tip.stringify(true))
-  Autograd.backpropVec(tip)
+  val tip2 = (x1 + x3) mm x2
+
+  println(tip2.stringify(true))
+  Autograd.backpropVec(tip2)
   println("dx1 " + x1.partialDerivative.get)
   println("dx2 " + x2.partialDerivative.get)
+  // println("dx3 " + x3.partialDerivative.get)
 
   // val x1_ = Constant(1d).value
   // val x2_ = Constant(3d).value
