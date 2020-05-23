@@ -25,8 +25,10 @@ import java.{util => ju}
   * The argument is coming down from the backward pass.
   * The Op fills in the symbolic part and the multiplication.
   *
-  * The shape of the argument given to that function is the transpose of the shape of the value of Op
-  * The shape of the return is n x m where n is the value dimension and m is the param dimension
+  * The shape of the argument given to that function is the shape of the value of Op
+  * The shape of the return is the shape of the argument (parameter) with respect the
+  * derivative is taken
+  *
   */
 trait Op {
   val value: Variable
