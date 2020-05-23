@@ -61,14 +61,24 @@ case class Variable(
   var partialDerivative: Option[Mat[Double]] = None
 
   def +(other: Variable) = Add(this, other).value
-  def -(other: Variable) =
-    Add(this, Mult(other, Constant(Mat(Vec(-1d))).value).value).value
-
+  def -(other: Variable) = Minus(this, other).value
   def *(other: Variable) = Mult(this, other).value
+  def /(other: Variable) = Div(this, other).value
   def mm(other: Variable) = MatMul(this, other).value
   def relu = Relu(this).value
   def sum = Sum(this).value
   def rowSum = RowSum(this).value
+  def colSum = ColSum(this).value
+  def exp = Exp(this).value
+  def log = Log(this).value
+  def sin = Sin(this).value
+  def cos = Cos(this).value
+  def tan = Tan(this).value
+  def atan = ArcTan(this).value
+  def pow(const: Double) = PowConst(this, const).value
+  def logSoftMax = LogSoftMaxRowWise(this).value
+  def crossEntropy(other: Variable) = CrossEntropyRowWise(this, other).value
+  def squaredFrobenius = SquaredFrobeniusMatrixNorm(this).value
 
 }
 
