@@ -30,7 +30,7 @@ import java.{util => ju}
   */
 trait Op {
   val value: Variable
-  val params: List[(Variable, Option[Mat[Double] => Mat[Double]])]
+  val params: List[(Variable, Mat[Double] => Mat[Double])]
 }
 
 case class Variable(
@@ -39,19 +39,18 @@ case class Variable(
     needsGrad: Boolean = true
 ) {
   def detach = copy(needsGrad = false)
-  def zipBackward(fn: Mat[Double] => Mat[Double]) = (this, Some(fn))
+  def zipBackward(fn: Mat[Double] => Mat[Double]) = (this, fn)
+
   def accumulateGrad(
       incoming: Mat[Double],
-      computeGrad: Option[Mat[Double] => Mat[Double]]
+      computeGrad: Mat[Double] => Mat[Double]
   ) = if (needsGrad) {
-    computeGrad.foreach { f =>
-      val d = f(incoming)
+    val d = computeGrad(incoming)
 
-      if (partialDerivative.isEmpty) {
-        partialDerivative = Some(d)
-      } else {
-        partialDerivative = Some(partialDerivative.get + d)
-      }
+    if (partialDerivative.isEmpty) {
+      partialDerivative = Some(d)
+    } else {
+      partialDerivative = Some(partialDerivative.get + d)
     }
   }
   val id = ju.UUID.randomUUID()
@@ -115,11 +114,10 @@ object Autograd {
   }
 }
 
-case class Relu(a: Variable) extends Op {
-  val params = List(
-    a.zipBackward(p => p.map(x => if (x < 0) 0d else x))
-  )
-  val value = Variable(this, a.value.map(x => if (x < 0) 0d else x))
+case class Relu(a: Variable) extends ElementwiseOp {
+
+  def op(d: Double) = if (d < 0d) 0d else d
+  def diff(d: Double) = if (d < 0d) 0d else 1d
 
   override def toString = s"RELU(${a.stringify()})"
 }
@@ -139,6 +137,15 @@ case class Add(a: Variable, b: Variable) extends Op {
 
   override def toString = s"(${a.stringify()} + ${b.stringify()})"
 }
+case class Minus(a: Variable, b: Variable) extends Op {
+  val params = List(
+    a.zipBackward(p => p),
+    b.zipBackward(p => p * (-1d))
+  )
+  val value = Variable(this, a.value - b.value)
+
+  override def toString = s"(${a.stringify()} - ${b.stringify()})"
+}
 
 case class Mult(a: Variable, b: Variable) extends Op {
   val params = List(
@@ -151,6 +158,18 @@ case class Mult(a: Variable, b: Variable) extends Op {
   val value = Variable(this, a.value * b.value)
 
   override def toString = s"(${a.stringify()} * ${b.stringify()})"
+}
+case class Div(a: Variable, b: Variable) extends Op {
+  val params = List(
+    a.zipBackward(p => {
+      p * b.value.map(x => 1d / x)
+    }),
+    b.zipBackward(p => p * (a.value * b.value.map(x => -1d / (x * x))))
+  )
+
+  val value = Variable(this, a.value / b.value)
+
+  override def toString = s"(${a.stringify()} / ${b.stringify()})"
 }
 
 case class Sum(a: Variable) extends Op {
@@ -190,6 +209,136 @@ case class MatMul(a: Variable, b: Variable) extends Op {
 
   override def toString = s"(${a.stringify()} dot ${b.stringify()})"
 }
+
+trait ElementwiseOp extends Op {
+  def a: Variable
+  def op(d: Double): Double
+  def diff(d: Double): Double
+
+  val params = List(
+    a.zipBackward(p => p * a.value.map(diff))
+  )
+  val value = Variable(this, a.value.map(op))
+
+}
+
+case class Exp(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.exp(d)
+  def diff(d: Double) = math.exp(d)
+
+  override def toString = s"EXP(${a.stringify()})"
+}
+case class Log(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.log(d)
+  def diff(d: Double) = 1d / d
+
+  override def toString = s"LOG(${a.stringify()})"
+}
+case class Sin(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.sin(d)
+  def diff(d: Double) = math.cos(d)
+
+  override def toString = s"SIN(${a.stringify()})"
+}
+case class Cos(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.cos(d)
+  def diff(d: Double) = -math.sin(d)
+
+  override def toString = s"COS(${a.stringify()})"
+}
+case class Tan(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.tan(d)
+  def diff(d: Double) = 1 + math.pow(math.tan(d), 2d)
+
+  override def toString = s"COS(${a.stringify()})"
+}
+case class ArcTan(a: Variable) extends ElementwiseOp {
+  def op(d: Double) = math.atan(d)
+  def diff(d: Double) = 1d / (1d + d * d)
+
+  override def toString = s"COS(${a.stringify()})"
+}
+
+case class PowConst(a: Variable, param: Double) extends ElementwiseOp {
+  def op(d: Double) = math.pow(d, param)
+  def diff(d: Double) = param * math.pow(d, param - 1d)
+
+  override def toString = s"POW(${a.stringify()},$param)"
+}
+
+trait RowWiseOp extends Op {
+  def a: Variable
+  def op(d: Vec[Double]): Vec[Double]
+  def diff(rowIdx: Int): Mat[Double]
+
+  val params = List(
+    a.zipBackward { p =>
+      p.mapRows { (prow, idx) =>
+        val d = diff(idx)
+        (Mat(prow) tmm d).row(0)
+      }
+    }
+  )
+  val value = Variable(this, a.value.mapRows { (row, _) => op(row) })
+
+}
+
+case class LogSoftMaxRowWise(a: Variable) extends RowWiseOp {
+
+  def diff(rowIdx: Int) = {
+    mat.ident(a.value.numCols) + value.value
+      .row(Array(rowIdx))
+      .map(x => -math.exp(x))
+  }
+
+  private def logSumExp(row: Vec[Double]) = {
+    val max = row.max2
+    math.log(row.map(e => math.exp(e - max)).sum2) + max
+  }
+  def op(row: Vec[Double]) = {
+    val l = logSumExp(row)
+    row.map(x => x - l)
+  }
+
+  override def toString = s"LOGSOFTMAX(${a.stringify()})"
+}
+
+case class CrossEntropyRowWise(a: Variable, b: Variable) extends Op {
+
+  override val params: List[(Variable, Mat[Double] => Mat[Double])] = List(
+    a.zipBackward { p => p * (b.value * (-1)) },
+    b.zipBackward { p => p * (a.value / b.value) * (-1) }
+  )
+
+  val value =
+    Variable(
+      this,
+      Mat(
+        a.value.rows
+          .zip(b.value.rows)
+          .map {
+            case (rowa, rowb) =>
+              (rowa vv rowb
+                .map(math.log)) * -1
+          }
+          .toVec
+      )
+    )
+  override def toString = s"CROSSENTROPY(${a.stringify()} , ${b.stringify()})"
+}
+
+case class SquaredFrobeniusMatrixNorm(a: Variable) extends Op {
+  val params = List(
+    a.zipBackward { p => p mm (a.value * 2) }
+  )
+  val value =
+    Variable(this, Mat(Vec(a.value.map(x => x * x).toVec.sum2)))
+  override def toString = s"FROBENIUS(${a.stringify()})"
+}
+
+// each row is a sample, batches are along the first dimension
+// https://arxiv.org/pdf/1502.03167.pdf
+// case class BatchNorm(a: Variable) extends Op
 
 object Test extends App {
   val x1 = Constant(Mat(Vec(1d, -20d, 3d), Vec(3d, 4d, 3d))).value
