@@ -131,28 +131,3 @@ object Autograd {
 
   }
 }
-object Test extends App {
-  val x1 = Constant(Mat(Vec(1d, -20d, 3d), Vec(3d, 4d, 3d))).value
-  val x2 = Constant(Mat(Vec(3d, 4d, 3d), Vec(5d, 6d, 3d)).T).value
-  val x3 = Constant(Mat(Vec(3d))).value
-  val tip = ColSum(
-    RowSum(Relu(Mult(MatMul(x1, x2).value, MatMul(x1, x2).value).value).value).value
-  ).value
-
-  val tip2 = (x1 + x3) mm x2
-
-  println(tip2.stringify(true))
-  Autograd.backprop(tip2)
-  println("dx1 " + x1.partialDerivative.get)
-  println("dx2 " + x2.partialDerivative.get)
-  // println("dx3 " + x3.partialDerivative.get)
-
-  // val x1_ = Constant(1d).value
-  // val x2_ = Constant(3d).value
-  // val tip_ = Mult(Add(x1_, x2_).value, x2_).value
-
-  // println(tip_.stringify(true))
-  // Autograd.backprop(tip_)
-  // println("dx1 " + x1_.partialDerivative.get)
-  // println("dx2 " + x2_.partialDerivative.get)
-}

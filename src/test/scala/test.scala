@@ -18,7 +18,6 @@ class GradientSuite extends FunSuite {
         (0 until row.length).map { j =>
           val epsM = mat.zeros(m.numRows, m.numCols)
           epsM(i, j) = eps
-          // println(i, j, f(m + epsM) - f(m - epsM))
           (f(m + epsM) - f(m - epsM)) / (2 * eps)
         }.toVec
     }
