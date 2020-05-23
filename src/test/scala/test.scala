@@ -169,7 +169,7 @@ class GradientSuite extends FunSuite {
     }
     (L.value.raw(0), x1.partialDerivative)
   }
-  testGradientAndValue("crossentropy - left")(mat2x3, -43.58114584090147) {
+  testGradientAndValue("crossentropy - left")(mat2x3, -182.0) {
     (m, doBackprop) =>
       val x1 = param(m)
       val x2 = param(mat2x3 * 2)
@@ -179,7 +179,7 @@ class GradientSuite extends FunSuite {
       }
       (L.value.raw(0), x1.partialDerivative)
   }
-  testGradientAndValue("crossentropy - right")(mat2x3, -58.05011009828523) {
+  testGradientAndValue("crossentropy - right")(mat2x3, -182.0) {
     (m, doBackprop) =>
       val x1 = param(m)
       val x2 = param(mat2x3 * 2)
@@ -272,6 +272,20 @@ class GradientSuite extends FunSuite {
       L.backprop()
     }
     (L.value.raw(0), x1.partialDerivative)
+  }
+  testGradientAndValue("l2 logistic regression loss")(
+    mat2x3_2,
+    151.0000008318073
+  ) { (m, doBackprop) =>
+    val w = param(m)
+    val data = const(mat3x2)
+    val y = const(mat.ident(3))
+    val L =
+      ((data.mm(w)).logSoftMax.crossEntropy(y).sum + w.squaredFrobenius)
+    if (doBackprop) {
+      L.backprop()
+    }
+    (L.value.raw(0), w.partialDerivative)
   }
 
 }

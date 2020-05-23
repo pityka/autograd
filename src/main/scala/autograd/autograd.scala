@@ -85,7 +85,7 @@ case class Variable(
   def atan = ArcTan(this).value
   def pow(const: Double) = PowConst(this, const).value
   def logSoftMax = LogSoftMaxRowWise(this).value
-  def crossEntropy(other: Variable) = CrossEntropyRowWise(this, other).value
+  def crossEntropy(other: Variable) = CrossEntropyRowWiseLog(this, other).value
   def squaredFrobenius = SquaredFrobeniusMatrixNorm(this).value
 
 }

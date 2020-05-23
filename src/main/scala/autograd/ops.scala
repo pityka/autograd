@@ -115,7 +115,6 @@ trait ElementwiseOp extends Op {
 case class Exp(a: Variable) extends ElementwiseOp {
   def op(d: Double) = math.exp(d)
   def diff(d: Double) = math.exp(d)
-
   override def toString = s"EXP(${a.stringify()})"
 }
 case class Log(a: Variable) extends ElementwiseOp {
@@ -189,32 +188,33 @@ case class LogSoftMaxRowWise(a: Variable) extends RowWiseOp {
     val l = logSumExp(row)
     row.map(x => x - l)
   }
-
   override def toString = s"LOGSOFTMAX(${a.stringify()})"
 }
 
-case class CrossEntropyRowWise(a: Variable, b: Variable) extends Op {
+// computes -(reference dot logQuery) for each row
+case class CrossEntropyRowWiseLog(logQuery: Variable, reference: Variable)
+    extends Op {
 
   override val params: List[(Variable, Mat[Double] => Mat[Double])] = List(
-    a.zipBackward { p => p * (b.value.map(x => -math.log(x))) },
-    b.zipBackward { p => p * (a.value / b.value) * (-1) }
+    reference.zipBackward { p => p * (logQuery.value * (-1)) },
+    logQuery.zipBackward { p => p * (reference.value) * (-1) }
   )
 
   val value =
     Variable(
       this,
       Mat(
-        a.value.rows
-          .zip(b.value.rows)
+        reference.value.rows
+          .zip(logQuery.value.rows)
           .map {
             case (rowa, rowb) =>
-              (rowa vv rowb
-                .map(math.log)) * -1
+              (rowa vv rowb) * -1
           }
           .toVec
       )
     )
-  override def toString = s"CROSSENTROPY(${a.stringify()} , ${b.stringify()})"
+  override def toString =
+    s"CROSSENTROPY(${reference.stringify()} , ${logQuery.stringify()})"
 }
 
 case class SquaredFrobeniusMatrixNorm(a: Variable) extends Op {
